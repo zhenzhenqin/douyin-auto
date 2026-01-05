@@ -1,0 +1,7 @@
+# 依赖目录
+node_modules/
+
+# 敏感数据 & 运行结果
+auth.json
+result.png
+task_log.txt

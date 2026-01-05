@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>抖音火花自动续 - 控制台</title>
+    <style>
+        body { font-family: 'Microsoft YaHei', sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #f5f5f5; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h2 { margin-top: 0; color: #333; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+        input[type="text"], input[type="time"] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; }
+        button { background: #fe2c55; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-right: 10px; transition: 0.2s; }
+        button:hover { opacity: 0.9; }
+        button.secondary { background: #333; }
+        button.green { background: #07c160; width: 100%; margin-top: 10px;}
+        #log { background: #222; color: #0f0; padding: 15px; border-radius: 5px; height: 150px; overflow-y: scroll; font-family: monospace; font-size: 12px; margin-top: 20px;}
+        .tips { font-size: 12px; color: #888; margin-top: 5px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>⚙️ 全局配置</h2>
+
+    <div class="form-group">
+        <label>好友昵称：</label>
+        <input type="text" id="friendName" placeholder="例如：吧唧吧唧">
+    </div>
+
+    <div class="form-group">
+        <label>每天定时运行时间：</label>
+        <input type="time" id="scheduleTime">
+        <div class="tips">设置后需点击下方“开启/更新自动续火花”才会生效</div>
+    </div>
+
+    <button onclick="saveConfig()">💾 保存配置</button>
+</div>
+
+<div class="card">
+    <h2>🚀 操作中心</h2>
+    <div style="margin-bottom: 15px;">
+        <p>1. 首次使用必须扫码登录：</p>
+        <button class="secondary" onclick="runLogin()">扫码登录</button>
+    </div>
+    <div style="margin-bottom: 15px;">
+        <p>2. 测试脚本是否正常：</p>
+        <button onclick="runNow()">立即运行一次</button>
+    </div>
+    <div style="border-top: 1px solid #eee; padding-top: 15px;">
+        <p>3. 终极部署 (后台静默运行)：</p>
+        <button class="green" onclick="setSchedule()">⏰ 开启 / 更新 每日自动任务</button>
+    </div>
+</div>
+
+<div id="log">等待操作...</div>
+
+<script>
+    const logDiv = document.getElementById('log');
+    function log(msg) {
+        logDiv.innerText = msg + '\n' + logDiv.innerText; // 新日志在最上面
+    }
+
+    // 加载配置
+    fetch('/api/config').then(r => r.json()).then(data => {
+        document.getElementById('friendName').value = data.friendName || '';
+        // 如果没有保存过时间，默认显示 08:00
+        document.getElementById('scheduleTime').value = data.scheduleTime || '08:00';
+    });
+
+    async function saveConfig() {
+        const name = document.getElementById('friendName').value;
+        const time = document.getElementById('scheduleTime').value;
+
+        if(!name || !time) return alert('请填写完整的名字和时间！');
+
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ friendName: name, scheduleTime: time })
+        });
+        log(`配置已保存: ${name} / ${time}`);
+        alert('配置保存成功！');
+    }
+
+    async function runLogin() {
+        log('正在启动登录窗口...');
+        const res = await fetch('/api/login', { method: 'POST' });
+        log(await res.text());
+    }
+
+    async function runNow() {
+        log('正在后台运行脚本，请稍候...');
+        const res = await fetch('/api/run', { method: 'POST' });
+        const text = await res.text();
+        if(res.ok) log('执行完成');
+        else log('执行出错:\n' + text);
+    }
+
+    async function setSchedule() {
+        // 先保存配置，确保时间是最新的
+        await saveConfig();
+
+        log('正在更新系统定时任务...');
+        const res = await fetch('/api/schedule', { method: 'POST' });
+        const data = await res.json();
+
+        if(data.success) {
+            alert(data.msg);
+            log(data.msg);
+        } else {
+            alert('失败: ' + data.error);
+            log(data.details);
+        }
+    }
+</script>
+</body>
+</html>
