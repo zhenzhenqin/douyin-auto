@@ -2,115 +2,173 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>抖音火花自动续 - 控制台</title>
+    <title>抖音火花群发助手 - 控制台</title>
     <style>
-        body { font-family: 'Microsoft YaHei', sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #f5f5f5; }
-        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        h2 { margin-top: 0; color: #333; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
-        input[type="text"], input[type="time"] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; }
-        button { background: #fe2c55; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-right: 10px; transition: 0.2s; }
-        button:hover { opacity: 0.9; }
-        button.secondary { background: #333; }
-        button.green { background: #07c160; width: 100%; margin-top: 10px;}
-        #log { background: #222; color: #0f0; padding: 15px; border-radius: 5px; height: 150px; overflow-y: scroll; font-family: monospace; font-size: 12px; margin-top: 20px;}
-        .tips { font-size: 12px; color: #888; margin-top: 5px; }
+        body { font-family: 'Microsoft YaHei', sans-serif; max-width: 600px; margin: 30px auto; padding: 20px; background: #f5f5f5; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 20px; }
+        h2 { margin-top: 0; color: #333; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;}
+
+        /* 列表样式 */
+        .friend-list { list-style: none; padding: 0; margin: 0; max-height: 200px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; }
+        .friend-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #f0f0f0; background: #fff; }
+        .friend-item:last-child { border-bottom: none; }
+        .friend-item span { font-weight: 500; color: #333; }
+        .del-btn { background: #ff4d4f; color: white; padding: 5px 10px; font-size: 12px; border-radius: 4px; margin: 0; }
+
+        /* 输入组 */
+        .input-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; outline: none; }
+        input[type="time"] { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+
+        /* 按钮通用 */
+        button { border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: 0.2s; color: white; }
+        button:active { transform: scale(0.98); }
+        .btn-add { background: #1677ff; }
+        .btn-save { background: #fe2c55; width: 100%; margin-top: 10px; font-size: 16px; font-weight: bold;}
+        .btn-login { background: #333; margin-right: 10px;}
+        .btn-run { background: #faad14; color: #fff; }
+        .btn-schedule { background: #52c41a; width: 100%; margin-top: 10px;}
+
+        #log { background: #1e1e1e; color: #4ade80; padding: 15px; border-radius: 8px; height: 180px; overflow-y: scroll; font-family: 'Consolas', monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+        .badge { background: #eee; color: #666; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
     </style>
 </head>
 <body>
+
 <div class="card">
-    <h2>⚙️ 全局配置</h2>
+    <h2>👥 好友管理 <span class="badge" id="count">0人</span></h2>
 
-    <div class="form-group">
-        <label>好友昵称：</label>
-        <input type="text" id="friendName" placeholder="例如：吧唧吧唧">
+    <div class="input-group">
+        <input type="text" id="newFriendName" placeholder="输入好友昵称 (如: 吧唧吧唧)">
+        <button class="btn-add" onclick="addFriend()">添加</button>
     </div>
 
-    <div class="form-group">
-        <label>每天定时运行时间：</label>
-        <input type="time" id="scheduleTime">
-        <div class="tips">设置后需点击下方“开启/更新自动续火花”才会生效</div>
-    </div>
-
-    <button onclick="saveConfig()">💾 保存配置</button>
+    <ul class="friend-list" id="friendList">
+        <li class="friend-item" style="justify-content: center; color: #999;">暂无好友，请添加</li>
+    </ul>
 </div>
 
 <div class="card">
-    <h2>🚀 操作中心</h2>
-    <div style="margin-bottom: 15px;">
-        <p>1. 首次使用必须扫码登录：</p>
-        <button class="secondary" onclick="runLogin()">扫码登录</button>
+    <h2>⏰ 定时设置</h2>
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+        <label>每天运行时间：</label>
+        <input type="time" id="scheduleTime" value="08:00">
     </div>
+    <button class="btn-save" onclick="saveConfig()">💾 保存所有配置</button>
+</div>
+
+<div class="card">
+    <h2>🚀 控制中心</h2>
     <div style="margin-bottom: 15px;">
-        <p>2. 测试脚本是否正常：</p>
-        <button onclick="runNow()">立即运行一次</button>
+        <button class="btn-login" onclick="runLogin()">扫码登录</button>
+        <button class="btn-run" onclick="runNow()">立即群发一次</button>
     </div>
     <div style="border-top: 1px solid #eee; padding-top: 15px;">
-        <p>3. 终极部署 (后台静默运行)：</p>
-        <button class="green" onclick="setSchedule()">⏰ 开启 / 更新 每日自动任务</button>
+        <button class="btn-schedule" onclick="setSchedule()">✅ 更新系统定时任务</button>
+        <div style="font-size: 12px; color: #888; margin-top: 5px; text-align: center;">更新任务前请先点击“保存配置”</div>
     </div>
 </div>
 
 <div id="log">等待操作...</div>
 
 <script>
+    let friends = [];
     const logDiv = document.getElementById('log');
+
     function log(msg) {
-        logDiv.innerText = msg + '\n' + logDiv.innerText; // 新日志在最上面
+        const time = new Date().toLocaleTimeString();
+        logDiv.innerText = `[${time}] ${msg}\n` + logDiv.innerText;
     }
 
-    // 加载配置
+    // 1. 初始化加载
     fetch('/api/config').then(r => r.json()).then(data => {
-        document.getElementById('friendName').value = data.friendName || '';
-        // 如果没有保存过时间，默认显示 08:00
+        // 兼容旧版本：如果 data.friendName 存在但 data.friends 不存在
+        if (!data.friends && data.friendName) {
+            friends = [{ name: data.friendName }];
+        } else {
+            friends = data.friends || [];
+        }
         document.getElementById('scheduleTime').value = data.scheduleTime || '08:00';
+        renderList();
     });
 
-    async function saveConfig() {
-        const name = document.getElementById('friendName').value;
-        const time = document.getElementById('scheduleTime').value;
+    // 2. 渲染列表
+    function renderList() {
+        const list = document.getElementById('friendList');
+        const count = document.getElementById('count');
+        list.innerHTML = '';
+        count.innerText = `${friends.length}人`;
 
-        if(!name || !time) return alert('请填写完整的名字和时间！');
+        if (friends.length === 0) {
+            list.innerHTML = '<li class="friend-item" style="justify-content: center; color: #999;">暂无好友，请添加</li>';
+            return;
+        }
+
+        friends.forEach((f, index) => {
+            const li = document.createElement('li');
+            li.className = 'friend-item';
+            li.innerHTML = `
+                    <span>${index + 1}. ${f.name}</span>
+                    <button class="del-btn" onclick="removeFriend(${index})">删除</button>
+                `;
+            list.appendChild(li);
+        });
+    }
+
+    // 3. 添加好友
+    function addFriend() {
+        const input = document.getElementById('newFriendName');
+        const name = input.value.trim();
+        if (!name) return alert('名字不能为空');
+
+        // 查重
+        if (friends.some(f => f.name === name)) return alert('这个好友已经在列表里了');
+
+        friends.push({ name: name });
+        input.value = '';
+        renderList();
+    }
+
+    // 4. 删除好友
+    function removeFriend(index) {
+        friends.splice(index, 1);
+        renderList();
+    }
+
+    // 5. 保存配置
+    async function saveConfig() {
+        const time = document.getElementById('scheduleTime').value;
+        if (friends.length === 0) return alert('请至少添加一个好友！');
 
         await fetch('/api/config', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ friendName: name, scheduleTime: time })
+            body: JSON.stringify({ friends: friends, scheduleTime: time })
         });
-        log(`配置已保存: ${name} / ${time}`);
-        alert('配置保存成功！');
+        log(`配置已保存：共 ${friends.length} 位好友，时间 ${time}`);
+        alert('保存成功！');
     }
 
     async function runLogin() {
-        log('正在启动登录窗口...');
+        log('启动登录窗口...');
         const res = await fetch('/api/login', { method: 'POST' });
         log(await res.text());
     }
 
     async function runNow() {
-        log('正在后台运行脚本，请稍候...');
+        log('正在后台启动群发任务...');
         const res = await fetch('/api/run', { method: 'POST' });
-        const text = await res.text();
-        if(res.ok) log('执行完成');
-        else log('执行出错:\n' + text);
+        if(res.ok) log('任务完成，请查看本地日志');
+        else log('启动失败');
     }
 
     async function setSchedule() {
-        // 先保存配置，确保时间是最新的
-        await saveConfig();
-
-        log('正在更新系统定时任务...');
+        await saveConfig(); // 强制先保存
+        log('正在更新系统任务...');
         const res = await fetch('/api/schedule', { method: 'POST' });
         const data = await res.json();
-
-        if(data.success) {
-            alert(data.msg);
-            log(data.msg);
-        } else {
-            alert('失败: ' + data.error);
-            log(data.details);
-        }
+        alert(data.msg || data.error);
+        log(data.msg || data.details);
     }
 </script>
 </body>

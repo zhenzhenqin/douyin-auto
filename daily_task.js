@@ -1,18 +1,16 @@
-// daily_task.js
+// daily_task.js - 批量群发版
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process'); // ✅ 新增：引入命令行工具用于检测网络
+const { execSync } = require('child_process');
 
-// 定义绝对路径
 const resolvePath = (filename) => path.join(__dirname, filename);
-
 const CONFIG_PATH = resolvePath('config.json');
 const AUTH_PATH = resolvePath('auth.json');
 const LOG_PATH = resolvePath('task_log.txt');
-const LOCK_PATH = resolvePath('task.lock'); // 锁文件路径
+const LOCK_PATH = resolvePath('task.lock');
+const MESSAGE_PATH = resolvePath('message.txt'); // 消息文件路径
 
-// 日志记录
 function writeLog(msg) {
     const time = new Date().toLocaleString();
     const logMsg = `[${time}] ${msg}`;
@@ -20,31 +18,21 @@ function writeLog(msg) {
     fs.appendFileSync(LOG_PATH, logMsg + '\n');
 }
 
-// 删除文件的辅助函数
 function deleteFileIfExists(filename) {
-    const filePath = resolvePath(filename);
     try {
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
-    } catch (e) {
-        // 忽略删除错误
-    }
+        if (fs.existsSync(resolvePath(filename))) fs.unlinkSync(resolvePath(filename));
+    } catch (e) {}
 }
 
-// 新增：检测网络连通性 (最多等待 180秒)
-// 这解决了电脑刚唤醒时网卡没准备好导致的报错
 async function waitForInternet() {
     writeLog('>>> 正在检查网络连接...');
-    for (let i = 0; i < 36; i++) { // 尝试 12 次，每次 5 秒
+    for (let i = 0; i < 12; i++) {
         try {
-            // ping 百度，检查是否通网
             execSync('ping www.baidu.com -n 1', { stdio: 'ignore' });
             writeLog('>>> 网络已连接 ✅');
             return true;
         } catch (e) {
             writeLog(`...等待网络恢复 (${i+1}/12)`);
-            // 同步等待 5 秒
             const start = Date.now();
             while (Date.now() - start < 5000) {}
         }
@@ -52,256 +40,213 @@ async function waitForInternet() {
     return false;
 }
 
-// 辅助截图函数
-async function takeScreenshot(page, name) {
-    try {
-        const filename = `debug_${name}.png`;
-        await page.screenshot({ path: resolvePath(filename) });
-        writeLog(`已保存调试截图: ${filename}`);
-    } catch (e) {
-        writeLog(`截图失败: ${e.message}`);
-    }
-}
-
-// 检查并创建锁
+// 锁逻辑
 function acquireLock() {
     if (fs.existsSync(LOCK_PATH)) {
-        // 检查锁文件时间，防止死锁
         const stats = fs.statSync(LOCK_PATH);
-        const now = new Date().getTime();
-        const lockTime = stats.mtime.getTime();
-        // 如果锁文件超过 15 分钟，认为上次任务已死，强制接管
-        if (now - lockTime > 15 * 60 * 1000) {
-            writeLog('警告：检测到过期的锁文件，强制删除并继续...');
+        if (new Date().getTime() - stats.mtime.getTime() > 15 * 60 * 1000) {
             deleteFileIfExists('task.lock');
         } else {
-            return false; // 锁有效，任务正在运行
+            return false;
         }
     }
     fs.writeFileSync(LOCK_PATH, 'LOCKED');
     return true;
 }
-
-// 释放锁
-function releaseLock() {
-    deleteFileIfExists('task.lock');
-}
+function releaseLock() { deleteFileIfExists('task.lock'); }
 
 (async () => {
-    // 0. 检查锁，防止多开
     if (!acquireLock()) {
-        writeLog('>>> 任务正在运行中，本次跳过 (Lock exists)');
+        writeLog('>>> 任务正在运行中，本次跳过');
         return;
     }
 
+    let browser; // 提升作用域以便 finally 关闭
+
     try {
-        writeLog('>>> 任务启动...');
+        writeLog('========== 批量任务启动 ==========');
 
-        // ✅ 新增步骤：先确保有网再往下跑
         const isOnline = await waitForInternet();
-        if (!isOnline) {
-            throw new Error('网络连接超时 (60s)，无法连接互联网，任务终止');
-        }
+        if (!isOnline) throw new Error('无网络连接');
 
-        // 1. 读取配置
+        // 1. 读取配置 (兼容新旧格式)
         let config;
         try {
             if (fs.existsSync(CONFIG_PATH)) {
                 config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
             } else {
-                throw new Error('找不到配置文件 config.json');
+                throw new Error('找不到配置文件');
+            }
+        } catch (e) { writeLog(e.message); return; }
+
+        // 2. 读取消息内容
+        let messageContent = '🔥'; // 默认值
+        try {
+            if (fs.existsSync(MESSAGE_PATH)) {
+                messageContent = fs.readFileSync(MESSAGE_PATH, 'utf-8').trim();
+                if (!messageContent) {
+                    writeLog('⚠️ message.txt 为空，使用默认消息');
+                    messageContent = '🔥';
+                }
+            } else {
+                writeLog('⚠️ 找不到 message.txt，使用默认消息');
             }
         } catch (e) {
-            writeLog(`配置读取失败: ${e.message}`);
+            writeLog(`读取消息文件失败: ${e.message}，使用默认消息`);
+        }
+        writeLog(`>>> 将发送消息: "${messageContent.substring(0, 20)}${messageContent.length > 20 ? '...' : ''}"`);
+
+        // 获取好友列表：支持新版数组，也兼容旧版单人
+        let friendList = [];
+        if (config.friends && Array.isArray(config.friends)) {
+            friendList = config.friends;
+        } else if (config.friendName) {
+            friendList = [{ name: config.friendName }];
+        }
+
+        if (friendList.length === 0) {
+            writeLog('❌ 好友列表为空，请在 UI 中添加好友');
             return;
         }
 
-        // 2. 检查凭证
-        if (!fs.existsSync(AUTH_PATH)) {
-            writeLog('找不到 auth.json，请先登录');
-            return;
-        }
+        if (!fs.existsSync(AUTH_PATH)) { writeLog('❌ 无登录凭证'); return; }
 
-        const browser = await chromium.launch({
-            headless: true,
-            args: [
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-dev-shm-usage'
-            ]
+        browser = await chromium.launch({
+            headless: true, // 生产环境改为 true
+            args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage']
         });
 
         const context = await browser.newContext({
             storageState: AUTH_PATH,
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             viewport: { width: 1920, height: 1080 },
-            ignoreHTTPSErrors: true // ✅ 新增：强制忽略证书错误，解决 ERR_CERT 问题
+            ignoreHTTPSErrors: true
         });
 
         const page = await context.newPage();
 
-        try {
-            writeLog('>>> 正在加载首页...');
+        // ----------------------------------------------------
+        // 核心循环逻辑：遍历每个好友
+        // ----------------------------------------------------
+        for (let i = 0; i < friendList.length; i++) {
+            const friend = friendList[i];
+            const friendName = friend.name;
 
-            // ✅ 修改：增加重试机制的页面跳转
-            // 如果第一次因为网络波动挂了，等5秒再试一次
+            writeLog(`>>> [${i + 1}/${friendList.length}] 正在处理: ${friendName}`);
+
             try {
-                await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-            } catch (navError) {
-                writeLog('⚠️ 第一次加载失败，等待 5 秒重试...');
-                await page.waitForTimeout(5000);
-                await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-            }
-
-            // 等待页面基本结构出现
-            try {
-                await page.waitForSelector('#root', { timeout: 15000 });
-            } catch(e) {
-                writeLog('等待 #root 超时，尝试继续...');
-            }
-
-            await page.waitForTimeout(5000);
-            await takeScreenshot(page, '1_home_loaded');
-
-            // 清理遮挡
-            writeLog('>>> 尝试清理弹窗...');
-            await page.evaluate(() => {
-                const mask = document.getElementById('douyin-web-recommend-guide-mask');
-                if (mask) mask.remove();
-                const dialogs = document.querySelectorAll('[role="dialog"], .semi-modal-mask, .login-mask');
-                dialogs.forEach(el => el.remove());
-                const closeBtn = document.querySelector('.dy-account-close');
-                if (closeBtn) closeBtn.click();
-            });
-
-            // 进入私信
-            writeLog('>>> 尝试点击私信/消息...');
-            const selectors = [
-                '[data-e2e="message-entry"]',
-                'text="私信"',
-                'text="消息"',
-                'li:has-text("私信")',
-                'li:has-text("消息")'
-            ];
-
-            let entered = false;
-            for (const sel of selectors) {
+                // 每次处理一个好友前，先回到首页或刷新，保证状态干净
+                // 增加重试机制
                 try {
+                    await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+                } catch (navError) {
+                    await page.waitForTimeout(3000);
+                    await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+                }
+
+                await page.waitForTimeout(3000);
+
+                // 清理弹窗
+                await page.evaluate(() => {
+                    const mask = document.getElementById('douyin-web-recommend-guide-mask');
+                    if (mask) mask.remove();
+                    const dialogs = document.querySelectorAll('[role="dialog"], .semi-modal-mask, .login-mask, .dy-account-close');
+                    dialogs.forEach(el => el.remove());
+                    const closeBtn = document.querySelector('.dy-account-close');
+                    if (closeBtn) closeBtn.click();
+                });
+
+                // 进私信
+                const messageEntry = page.getByText('私信', { exact: true }).first();
+                if (await messageEntry.isVisible()) {
+                    await messageEntry.click({ force: true });
+                } else {
+                    await page.getByText('消息').first().click({ force: true });
+                }
+
+                await page.waitForTimeout(3000);
+
+                // 搜人
+                try {
+                    // 等待好友列表出现
+                    await page.waitForSelector('.im-list-container', { timeout: 10000 }).catch(() => {});
+
+                    // 点击好友
+                    const friendEl = page.getByText(friendName).first();
+                    await friendEl.waitFor({ state: 'visible', timeout: 8000 });
+                    await friendEl.click({ force: true });
+                } catch (e) {
+                    throw new Error(`找不到好友 "${friendName}"，请检查昵称`);
+                }
+
+                await page.waitForTimeout(2000);
+
+                // 找输入框
+                const editorSelectors = ['.public-DraftStyleDefault-block', '[contenteditable="true"]', '.DraftEditor-root'];
+                let editorFound = false;
+                for (const sel of editorSelectors) {
                     const el = page.locator(sel).first();
                     if (await el.isVisible()) {
-                        writeLog(`找到入口并点击: ${sel}`);
                         await el.click({ force: true });
-                        entered = true;
+                        await page.keyboard.press('Control+A');
+                        await page.keyboard.press('Backspace');
+                        editorFound = true;
                         break;
                     }
-                } catch (e) {}
-            }
-
-            if (!entered) {
-                const content = await page.content();
-                if (content.includes('登录')) {
-                    writeLog('警告：页面检测到“登录”字样，可能凭证已失效');
                 }
-                throw new Error('未找到“私信”或“消息”入口');
-            }
+                if (!editorFound) throw new Error('无法定位输入框');
 
-            await page.waitForTimeout(5000);
-            await takeScreenshot(page, '2_message_page');
+                // 输入
+                await page.keyboard.type(messageContent, { delay: 100 });
+                await page.waitForTimeout(1500);
 
-            const friendName = config.friendName;
-            writeLog(`>>> 正在查找好友: ${friendName}`);
+                // 发送
+                await page.keyboard.press('Enter');
+                await page.waitForTimeout(1000);
 
-            try {
-                await page.waitForSelector(`text=${friendName}`, { timeout: 10000 });
-                await page.getByText(friendName).first().click({ force: true });
-                writeLog(`已点击好友: ${friendName}`);
-            } catch (e) {
-                writeLog(`未在列表中直接找到好友，尝试截图记录...`);
-                await takeScreenshot(page, '3_friend_not_found');
-                throw new Error(`找不到好友 "${friendName}"`);
-            }
+                const sendBtn = page.getByText('发送', { exact: true });
+                await page.evaluate(() => { // 清弹窗
+                    const mask = document.getElementById('douyin-web-recommend-guide-mask');
+                    if (mask) mask.remove();
+                });
+                if (await sendBtn.isVisible()) await sendBtn.click({ force: true });
 
-            await page.waitForTimeout(3000);
-
-            // 输入
-            writeLog('>>> 正在定位输入框...');
-            const editorSelectors = [
-                '.public-DraftStyleDefault-block',
-                '[contenteditable="true"]',
-                '.DraftEditor-root'
-            ];
-
-            let editorFound = false;
-            for (const sel of editorSelectors) {
-                const el = page.locator(sel).first();
-                if (await el.isVisible()) {
-                    await el.click({ force: true });
-                    // 清空内容
-                    await page.keyboard.press('Control+A');
-                    await page.keyboard.press('Backspace');
-                    editorFound = true;
-                    break;
+                // 验证
+                try {
+                    // 验证消息是否上屏，只取前10个字符验证，防止太长匹配不到
+                    const checkText = messageContent.substring(0, 10);
+                    await page.waitForSelector(`text=${checkText}`, { timeout: 5000 });
+                    writeLog(`✅ [${friendName}] 发送成功`);
+                } catch (e) {
+                    writeLog(`⚠️ [${friendName}] 未检测到消息上屏，可能失败`);
+                    await page.screenshot({ path: resolvePath(`error_${friendName}.png`) });
                 }
+
+            } catch (err) {
+                // ❌ 单个好友失败，不影响其他人，记录错误并继续
+                writeLog(`❌ [${friendName}] 失败: ${err.message}`);
+                await page.screenshot({ path: resolvePath(`error_${friendName}.png`) });
             }
 
-            if (!editorFound) throw new Error('找不到输入框');
-
-            const message = '这是由伟大的mjc开发的解放双手自动续火花脚本工具';
-            // 降低打字速度，防止被检测
-            await page.keyboard.type(message, { delay: 100 });
-
-            writeLog('>>> 内容已输入，等待网页响应...');
-            await page.waitForTimeout(2000);
-
-            // 发送策略
-            writeLog('>>> 执行发送策略...');
-            await page.keyboard.press('Enter');
-            await page.waitForTimeout(1000);
-
-            const sendBtn = page.getByText('发送', { exact: true });
-
-            await page.evaluate(() => {
-                const mask = document.getElementById('douyin-web-recommend-guide-mask');
-                if (mask) mask.remove();
-            });
-
-            if (await sendBtn.isVisible()) {
-                await sendBtn.click({ force: true });
+            // --- 间隔等待 ---
+            // 如果不是最后一个人，随机等待 5-10秒，防止操作太快被风控
+            if (i < friendList.length - 1) {
+                const waitTime = Math.floor(Math.random() * 5000) + 5000;
+                writeLog(`...随机休息 ${waitTime/1000} 秒...`);
+                await page.waitForTimeout(waitTime);
             }
-
-            // 验证
-            try {
-                await page.waitForSelector(`text=${message}`, { timeout: 5000 });
-                writeLog('>>> ✅ 检测到消息已上屏，发送成功！');
-            } catch (e) {
-                writeLog('>>> ⚠️ 警告：未在聊天区检测到发送的消息，可能发送失败');
-                await takeScreenshot(page, 'send_failed_check');
-            }
-
-            await page.waitForTimeout(2000);
-            await takeScreenshot(page, '4_after_send');
-
-            // 成功逻辑
-            writeLog('任务执行成功');
-            deleteFileIfExists('final_success.png');
-            deleteFileIfExists('final_error.png');
-
-        } catch (error) {
-            writeLog(`运行出错: ${error.message}`);
-            try {
-                writeLog(`当前 URL: ${page.url()}`);
-                await page.screenshot({ path: resolvePath('final_error.png'), fullPage: true });
-                writeLog('已保存错误截图: final_error.png');
-            } catch (screenshotError) {
-                writeLog(`保存错误截图失败: ${screenshotError.message}`);
-            }
-        } finally {
-            await browser.close();
-            writeLog('>>> 进程结束\n');
         }
-    } catch (err) {
-        writeLog(`严重错误: ${err.message}`);
+
+        writeLog('========== 所有任务执行结束 ==========');
+        deleteFileIfExists('final_error.png'); // 清理之前的全局错误图
+
+    } catch (globalErr) {
+        writeLog(`❌ 全局严重错误: ${globalErr.message}`);
+        // 如果 page 还在，尝试截图
+        // await page.screenshot({ path: resolvePath('final_error.png') }); 
     } finally {
+        if (browser) await browser.close();
+        writeLog('>>> 进程退出\n');
         releaseLock();
     }
 })();
