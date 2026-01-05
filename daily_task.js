@@ -2,6 +2,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process'); // ✅ 新增：引入命令行工具用于检测网络
 
 // 定义绝对路径
 const resolvePath = (filename) => path.join(__dirname, filename);
@@ -31,6 +32,26 @@ function deleteFileIfExists(filename) {
     }
 }
 
+// 新增：检测网络连通性 (最多等待 180秒)
+// 这解决了电脑刚唤醒时网卡没准备好导致的报错
+async function waitForInternet() {
+    writeLog('>>> 正在检查网络连接...');
+    for (let i = 0; i < 36; i++) { // 尝试 12 次，每次 5 秒
+        try {
+            // ping 百度，检查是否通网
+            execSync('ping www.baidu.com -n 1', { stdio: 'ignore' });
+            writeLog('>>> 网络已连接 ✅');
+            return true;
+        } catch (e) {
+            writeLog(`...等待网络恢复 (${i+1}/12)`);
+            // 同步等待 5 秒
+            const start = Date.now();
+            while (Date.now() - start < 5000) {}
+        }
+    }
+    return false;
+}
+
 // 辅助截图函数
 async function takeScreenshot(page, name) {
     try {
@@ -45,7 +66,7 @@ async function takeScreenshot(page, name) {
 // 检查并创建锁
 function acquireLock() {
     if (fs.existsSync(LOCK_PATH)) {
-        // 检查锁文件时间，防止死锁（例如上次崩溃没删掉）
+        // 检查锁文件时间，防止死锁
         const stats = fs.statSync(LOCK_PATH);
         const now = new Date().getTime();
         const lockTime = stats.mtime.getTime();
@@ -76,6 +97,12 @@ function releaseLock() {
     try {
         writeLog('>>> 任务启动...');
 
+        // ✅ 新增步骤：先确保有网再往下跑
+        const isOnline = await waitForInternet();
+        if (!isOnline) {
+            throw new Error('网络连接超时 (60s)，无法连接互联网，任务终止');
+        }
+
         // 1. 读取配置
         let config;
         try {
@@ -99,35 +126,41 @@ function releaseLock() {
             headless: true,
             args: [
                 '--disable-blink-features=AutomationControlled',
-                '--no-sandbox', // 增加稳定性
-                '--disable-dev-shm-usage' // 防止内存不足崩溃
+                '--no-sandbox',
+                '--disable-dev-shm-usage'
             ]
         });
 
         const context = await browser.newContext({
             storageState: AUTH_PATH,
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            viewport: { width: 1920, height: 1080 }
+            viewport: { width: 1920, height: 1080 },
+            ignoreHTTPSErrors: true // ✅ 新增：强制忽略证书错误，解决 ERR_CERT 问题
         });
 
         const page = await context.newPage();
 
         try {
             writeLog('>>> 正在加载首页...');
-            // 修改：不再等待 networkidle，因为抖音视频流会一直加载导致超时
-            // 改为等待 domcontentloaded，然后手动等待关键元素
-            await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-            
-            // 等待页面基本结构出现，证明加载成功
+
+            // ✅ 修改：增加重试机制的页面跳转
+            // 如果第一次因为网络波动挂了，等5秒再试一次
             try {
-                await page.waitForSelector('#root', { timeout: 15000 }); 
+                await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+            } catch (navError) {
+                writeLog('⚠️ 第一次加载失败，等待 5 秒重试...');
+                await page.waitForTimeout(5000);
+                await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+            }
+
+            // 等待页面基本结构出现
+            try {
+                await page.waitForSelector('#root', { timeout: 15000 });
             } catch(e) {
                 writeLog('等待 #root 超时，尝试继续...');
             }
-            
-            await page.waitForTimeout(5000); // 额外等待几秒让脚本加载
-            
-            // 截图：首页加载情况
+
+            await page.waitForTimeout(5000);
             await takeScreenshot(page, '1_home_loaded');
 
             // 清理遮挡
@@ -144,13 +177,13 @@ function releaseLock() {
             // 进入私信
             writeLog('>>> 尝试点击私信/消息...');
             const selectors = [
-                '[data-e2e="message-entry"]', 
+                '[data-e2e="message-entry"]',
                 'text="私信"',
                 'text="消息"',
                 'li:has-text("私信")',
                 'li:has-text("消息")'
             ];
-            
+
             let entered = false;
             for (const sel of selectors) {
                 try {
@@ -163,24 +196,22 @@ function releaseLock() {
                     }
                 } catch (e) {}
             }
-            
+
             if (!entered) {
-                 // 检查是否未登录
-                 const content = await page.content();
-                 if (content.includes('登录')) {
-                     writeLog('警告：页面检测到“登录”字样，可能凭证已失效');
-                 }
-                 throw new Error('未找到“私信”或“消息”入口');
+                const content = await page.content();
+                if (content.includes('登录')) {
+                    writeLog('警告：页面检测到“登录”字样，可能凭证已失效');
+                }
+                throw new Error('未找到“私信”或“消息”入口');
             }
 
-            await page.waitForTimeout(5000); // 等待私信页面加载
+            await page.waitForTimeout(5000);
             await takeScreenshot(page, '2_message_page');
 
             const friendName = config.friendName;
             writeLog(`>>> 正在查找好友: ${friendName}`);
 
             try {
-                // 显式等待好友名字出现，最多等 10 秒
                 await page.waitForSelector(`text=${friendName}`, { timeout: 10000 });
                 await page.getByText(friendName).first().click({ force: true });
                 writeLog(`已点击好友: ${friendName}`);
@@ -194,7 +225,6 @@ function releaseLock() {
 
             // 输入
             writeLog('>>> 正在定位输入框...');
-            // 1. 定位并聚焦输入框
             const editorSelectors = [
                 '.public-DraftStyleDefault-block',
                 '[contenteditable="true"]',
@@ -205,9 +235,8 @@ function releaseLock() {
             for (const sel of editorSelectors) {
                 const el = page.locator(sel).first();
                 if (await el.isVisible()) {
-                    // 先点击聚焦
                     await el.click({ force: true });
-                    // 清空可能存在的旧内容 (全选+删除)
+                    // 清空内容
                     await page.keyboard.press('Control+A');
                     await page.keyboard.press('Backspace');
                     editorFound = true;
@@ -217,64 +246,47 @@ function releaseLock() {
 
             if (!editorFound) throw new Error('找不到输入框');
 
-            // 2. 输入内容 (打字慢一点，更容易被识别)
             const message = '这是由伟大的mjc开发的解放双手自动续火花脚本工具';
-            await page.keyboard.type(message, { delay: 100 }); // 每个字间隔100ms
+            // 降低打字速度，防止被检测
+            await page.keyboard.type(message, { delay: 100 });
 
             writeLog('>>> 内容已输入，等待网页响应...');
-            await page.waitForTimeout(2000); // 关键等待：让网页React反应过来按钮该变亮了
+            await page.waitForTimeout(2000);
 
-            // 3. 双重发送策略 (先回车，后点击)
+            // 发送策略
             writeLog('>>> 执行发送策略...');
-
-            // 策略A: 键盘回车 (最稳妥的方式)
             await page.keyboard.press('Enter');
             await page.waitForTimeout(1000);
 
-            // 策略B: 尝试点击发送按钮 (作为补刀)
-            // 只有当聊天记录里没出现新消息时，才去点按钮，或者干脆不管它直接点
             const sendBtn = page.getByText('发送', { exact: true });
 
-            // 清理遮罩防止点不到
             await page.evaluate(() => {
                 const mask = document.getElementById('douyin-web-recommend-guide-mask');
                 if (mask) mask.remove();
             });
 
             if (await sendBtn.isVisible()) {
-                // 不管按钮是不是灰的，尝试点一下，反正没坏处
-                // 此时已经按过回车了，如果回车生效了，点这一下也无妨
                 await sendBtn.click({ force: true });
             }
 
-            // 4. 验证是否发送成功 (检查聊天记录里有没有刚才发的话)
-            // 这一步非常重要，能告诉你到底发出去没
+            // 验证
             try {
-                // 等待刚才发的消息出现在屏幕上
                 await page.waitForSelector(`text=${message}`, { timeout: 5000 });
-                writeLog('>>>检测到消息已上屏，发送成功！');
+                writeLog('>>> ✅ 检测到消息已上屏，发送成功！');
             } catch (e) {
-                writeLog('>>> 警告：未在聊天区检测到发送的消息，可能发送失败');
-                // 截图留证
+                writeLog('>>> ⚠️ 警告：未在聊天区检测到发送的消息，可能发送失败');
                 await takeScreenshot(page, 'send_failed_check');
             }
 
             await page.waitForTimeout(2000);
             await takeScreenshot(page, '4_after_send');
 
-            // -----------------------------------------------------
-            // 成功处理逻辑
-            // -----------------------------------------------------
+            // 成功逻辑
             writeLog('任务执行成功');
-
-            // 删除旧的截图，保持文件夹干净
             deleteFileIfExists('final_success.png');
             deleteFileIfExists('final_error.png');
-            
+
         } catch (error) {
-            // -----------------------------------------------------
-            // 失败处理逻辑
-            // -----------------------------------------------------
             writeLog(`运行出错: ${error.message}`);
             try {
                 writeLog(`当前 URL: ${page.url()}`);
@@ -290,7 +302,6 @@ function releaseLock() {
     } catch (err) {
         writeLog(`严重错误: ${err.message}`);
     } finally {
-        // 释放锁
         releaseLock();
     }
 })();

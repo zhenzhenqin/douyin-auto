@@ -5,3 +5,4 @@ node_modules/
 auth.json
 result.png
 task_log.txt
+*.png
