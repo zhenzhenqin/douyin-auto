@@ -3,6 +3,7 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const open = require('open');
+const { chromium } = require('playwright');
 
 const app = express();
 app.use(express.json());
@@ -73,6 +74,53 @@ app.post('/api/schedule', (req, res) => {
         // 返回成功信息给前端
         res.json({ success: true, msg: `✅ 任务设置成功！将在每天 [${time}] 自动运行。` });
     });
+});
+
+// 6. 后台定时刷新登录凭证（每 24 小时访问一次抖音，防止 cookie 过期）
+const AUTH_PATH = path.join(__dirname, 'auth.json');
+const REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 小时
+
+async function refreshSession() {
+    if (!fs.existsSync(AUTH_PATH)) {
+        console.log('[刷新] auth.json 不存在，跳过');
+        return false;
+    }
+    let browser;
+    try {
+        browser = await chromium.launch({
+            headless: true,
+            args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage']
+        });
+        const context = await browser.newContext({
+            storageState: AUTH_PATH,
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            viewport: { width: 1920, height: 1080 },
+            ignoreHTTPSErrors: true
+        });
+        const page = await context.newPage();
+        await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForTimeout(5000); // 等待页面加载完成，让 cookie 充分刷新
+
+        // 保存更新后的 cookie
+        await context.storageState({ path: AUTH_PATH });
+        console.log(`[刷新] ✅ 登录凭证已刷新 (${new Date().toLocaleString()})`);
+        return true;
+    } catch (e) {
+        console.error(`[刷新] ❌ 刷新失败: ${e.message}`);
+        return false;
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// 启动时立即刷新一次，之后每 24 小时刷新
+refreshSession();
+setInterval(refreshSession, REFRESH_INTERVAL);
+
+// 7. 手动触发刷新的 API
+app.post('/api/refresh', async (req, res) => {
+    const ok = await refreshSession();
+    res.json({ success: ok, msg: ok ? '✅ 登录凭证刷新成功' : '❌ 刷新失败，请先扫码登录' });
 });
 
 app.listen(3000, () => {

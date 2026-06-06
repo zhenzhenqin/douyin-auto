@@ -9,7 +9,7 @@ const CONFIG_PATH = resolvePath('config.json');
 const AUTH_PATH = resolvePath('auth.json');
 const LOG_PATH = resolvePath('task_log.txt');
 const LOCK_PATH = resolvePath('task.lock');
-const MESSAGE_PATH = resolvePath('message.txt'); // 消息文件路径
+const MESSAGE_PATH = resolvePath('message.txt');
 
 function writeLog(msg) {
     const time = new Date().toLocaleString();
@@ -29,7 +29,7 @@ async function waitForInternet() {
     for (let i = 0; i < 12; i++) {
         try {
             execSync('ping www.baidu.com -n 1', { stdio: 'ignore' });
-            writeLog('>>> 网络已连接 ✅');
+            writeLog('>>> 网络已连接');
             return true;
         } catch (e) {
             writeLog(`...等待网络恢复 (${i+1}/12)`);
@@ -105,11 +105,11 @@ function releaseLock() { deleteFileIfExists('task.lock'); }
         }
 
         if (friendList.length === 0) {
-            writeLog('❌ 好友列表为空，请在 UI 中添加好友');
+            writeLog(' 好友列表为空，请在 UI 中添加好友');
             return;
         }
 
-        if (!fs.existsSync(AUTH_PATH)) { writeLog('❌ 无登录凭证'); return; }
+        if (!fs.existsSync(AUTH_PATH)) { writeLog('无登录凭证'); return; }
 
         browser = await chromium.launch({
             headless: true, // 生产环境改为 true
@@ -223,8 +223,8 @@ function releaseLock() { deleteFileIfExists('task.lock'); }
                 }
 
             } catch (err) {
-                // ❌ 单个好友失败，不影响其他人，记录错误并继续
-                writeLog(`❌ [${friendName}] 失败: ${err.message}`);
+                // 单个好友失败，不影响其他人，记录错误并继续
+                writeLog(`[${friendName}] 失败: ${err.message}`);
                 await page.screenshot({ path: resolvePath(`error_${friendName}.png`) });
             }
 
@@ -241,7 +241,7 @@ function releaseLock() { deleteFileIfExists('task.lock'); }
         deleteFileIfExists('final_error.png'); // 清理之前的全局错误图
 
     } catch (globalErr) {
-        writeLog(`❌ 全局严重错误: ${globalErr.message}`);
+        writeLog(`全局严重错误: ${globalErr.message}`);
         // 如果 page 还在，尝试截图
         // await page.screenshot({ path: resolvePath('final_error.png') }); 
     } finally {

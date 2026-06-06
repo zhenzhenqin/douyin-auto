@@ -1,8 +1,14 @@
 {
   "friends": [
     {
-      "name": "测试"
+      "name": "日月"
+    },
+    {
+      "name": "徐小姐"
+    },
+    {
+      "name": "真稀奇"
     }
   ],
-  "scheduleTime": "12:00"
+  "scheduleTime": "00:00"
 }
